@@ -11,15 +11,26 @@ class HeadlessMermaidError extends Error {
 }
 
 async function render(page, id, definition) {
-    const {success,svgCode,error} = await page.evaluate((id, definition) => {
+    const { success, svgCode, error } = await page.evaluate((id, definition) => {
         try {
+            function createElementFromString(htmlString) {
+                var div = document.createElement('div');
+                div.innerHTML = htmlString.trim();
+                return div.firstChild;
+            }
+
             const svgCode = window.mermaid.mermaidAPI.render(id, definition)
+
+            const elem = createElementFromString(svgCode)
+            elem.removeAttribute("height")
+            elem.removeAttribute("style")
+            elem.removeAttribute("width")
+            elem.classList.add("mermaid")
             return {
                 success: true,
-                svgCode,
+                svgCode: elem.outerHTML,
                 error: null
-            }
-            ;
+            };
         } catch (e) {
             return {
                 success: false,
@@ -29,12 +40,14 @@ async function render(page, id, definition) {
         }
     }, id, definition);
 
-    if(success){
+    if (success) {
         return svgCode
     } else {
         throw new HeadlessMermaidError("failed to render SVG", JSON.parse(error))
     }
 }
+
+
 
 function mermaidNodes(markdownAST, language) {
     const result = []
@@ -46,22 +59,19 @@ function mermaidNodes(markdownAST, language) {
     return result;
 }
 
-async function getMermaidBrowser(theme, viewport, mermaidOptions) {
-    try{
-        browser = await puppeteer.launch({args: ['--no-sandbox', '--disable-setuid-sandbox']});
+async function getMermaidBrowser(viewport, mermaidOptions) {
+    try {
+        browser = await puppeteer.launch({ args: ['--no-sandbox', '--disable-setuid-sandbox'] });
         const page = await browser.newPage();
         page.setViewport(viewport);
         await page.goto('data:text/html,<html></html>');
         await page.addScriptTag({
-            path:  require.resolve('mermaid/dist/mermaid.min.js')
+            path: require.resolve('mermaid/dist/mermaid.min.js')
         });
-        const {success, error} = await page.evaluate((theme, mermaidOptions) => {
-    
+        const { success, error } = await page.evaluate((mermaidOptions) => {
+
             try {
-                window.mermaid.initialize({
-                    ...mermaidOptions,
-                    theme
-                })
+                window.mermaid.initialize(mermaidOptions)
 
                 return {
                     success: true,
@@ -73,14 +83,14 @@ async function getMermaidBrowser(theme, viewport, mermaidOptions) {
                     error: JSON.stringify(e, Object.getOwnPropertyNames(e))
                 }
             }
-        }, theme, mermaidOptions);
-        if(success){
-            return {browser,page}
+        }, mermaidOptions);
+        if (success) {
+            return { browser, page }
         } else {
             throw new HeadlessMermaidError("failed to initialize mermaid", JSON.parse(error))
         }
-    } catch(e) {
-        if (e instanceof HeadlessMermaidError){
+    } catch (e) {
+        if (e instanceof HeadlessMermaidError) {
             throw e
         } else {
             throw new HeadlessMermaidError("failed to initialize browser", e)
@@ -88,13 +98,44 @@ async function getMermaidBrowser(theme, viewport, mermaidOptions) {
     }
 }
 
-module.exports = async ({markdownAST},
-                        {
-                            language = 'mermaid',
-                            theme = 'default',
-                            viewport = {height: 200, width: 200},
-                            mermaidOptions = {}
-                        }) => {
+const defaultOptions = {
+    language: 'mermaid',
+    viewport: { height: 200, width: 200 },
+    mermaidOptions: {
+        theme: 'default',
+
+    }
+}
+
+const renderGraphs = async(definitions, options) => {
+    const { viewport, mermaidOptions } = {
+        ...defaultOptions,
+        ...options
+    }
+    // Launch virtual browser
+    const { browser, page } = await getMermaidBrowser(viewport, mermaidOptions)
+
+    console.log("browser created.")
+    let count = 0
+    try {
+        graphs = await Promise.all(definitions.map(async def => {
+            const svgCode = await render(page, `mermaid${count}`, def);
+            return svgCode
+        }));
+        return graphs
+    } finally {
+        if (browser) {
+            await browser.close();
+        }
+    }
+}
+
+const processRemark = async({ markdownAST }, options) => {
+
+    const { language, viewport, mermaidOptions } = {
+        ...defaultOptions,
+        ...options
+    }
 
     // Check if there is a match before launching anything
     let nodes = mermaidNodes(markdownAST, language);
@@ -104,7 +145,7 @@ module.exports = async ({markdownAST},
     }
 
     // Launch virtual browser
-    const {browser,page} = await getMermaidBrowser(theme, viewport, mermaidOptions)
+    const { browser, page } = await getMermaidBrowser(viewport, mermaidOptions)
 
     console.log("browser created.")
     let count = 0
@@ -120,3 +161,7 @@ module.exports = async ({markdownAST},
         }
     }
 };
+
+module.exports = processRemark
+
+module.exports.renderGraphs = renderGraphs
