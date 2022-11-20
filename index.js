@@ -3,6 +3,17 @@ const puppeteer = require('puppeteer');
 
 class HeadlessMermaidError extends Error {
     constructor(message, cause) {
+        if(typeof cause === "string") {
+            cause = {
+                stack: "!!MISSING!!",
+                message: cause,
+            }
+        } else if(!(typeof cause === "object" && "message" in cause)) {
+            cause = {
+                message: "!!UNPARSEABLE ERROR!! value:",
+                stack: JSON.stringify(cause),
+            }
+        }
         const m = `${message}: ${cause.message}\n${cause.stack}`
         super(m)
         this.name = "HeadlessMermaidError"
@@ -11,15 +22,15 @@ class HeadlessMermaidError extends Error {
 }
 
 async function render(page, id, definition) {
-    const {success,svgCode,error} = await page.evaluate((id, definition) => {
+
+    const {success,svgCode,error} = await page.evaluate(async (id, definition) => {
         try {
-            const svgCode = window.mermaid.mermaidAPI.render(id, definition)
+            const svgCode = await window.mermaid.mermaidAPI.render(id, definition)
             return {
                 success: true,
                 svgCode,
                 error: null
             }
-            ;
         } catch (e) {
             return {
                 success: false,
@@ -46,22 +57,24 @@ function mermaidNodes(markdownAST, language) {
     return result;
 }
 
-async function getMermaidBrowser(theme, viewport, mermaidOptions) {
+async function getMermaidBrowser(viewport, mermaidOptions) {
     try{
         browser = await puppeteer.launch({args: ['--no-sandbox', '--disable-setuid-sandbox']});
         const page = await browser.newPage();
         page.setViewport(viewport);
         await page.goto('data:text/html,<html></html>');
+
+        script = require.resolve('mermaid/dist/mermaid.js')
+        console.log('mermaid.min', script)
+        console.log("mermaidOptions", mermaidOptions)
+
         await page.addScriptTag({
-            path:  require.resolve('mermaid/dist/mermaid.min.js')
+            path:  script,
         });
-        const {success, error} = await page.evaluate((theme, mermaidOptions) => {
+        const {success, error} = await page.evaluate(async (mermaidOptions) => {
     
             try {
-                window.mermaid.initialize({
-                    ...mermaidOptions,
-                    theme
-                })
+                await window.mermaid.initialize(mermaidOptions)
 
                 return {
                     success: true,
@@ -73,7 +86,7 @@ async function getMermaidBrowser(theme, viewport, mermaidOptions) {
                     error: JSON.stringify(e, Object.getOwnPropertyNames(e))
                 }
             }
-        }, theme, mermaidOptions);
+        }, mermaidOptions);
         if(success){
             return {browser,page}
         } else {
@@ -91,11 +104,9 @@ async function getMermaidBrowser(theme, viewport, mermaidOptions) {
 module.exports = async ({markdownAST},
                         {
                             language = 'mermaid',
-                            theme = 'default',
                             viewport = {height: 200, width: 200},
                             mermaidOptions = {}
                         }) => {
-
     // Check if there is a match before launching anything
     let nodes = mermaidNodes(markdownAST, language);
     if (nodes.length === 0) {
@@ -104,13 +115,14 @@ module.exports = async ({markdownAST},
     }
 
     // Launch virtual browser
-    const {browser,page} = await getMermaidBrowser(theme, viewport, mermaidOptions)
+    const {browser,page} = await getMermaidBrowser(viewport, mermaidOptions)
 
     console.log("browser created.")
     let count = 0
     try {
         await Promise.all(nodes.map(async node => {
             node.type = 'html';
+
             const svgCode = await render(page, `mermaid${count}`, node.value);
             node.value = svgCode
         }));

@@ -25,7 +25,6 @@
   },
   "homepage": "https://github.com/remcohaszing/gatsby-remark-mermaid#readme",
   "dependencies": {
-    "mermaid": "^8.14.0",
     "unist-util-visit": "^1.4.1"
   },
   "peerDependencies": {
